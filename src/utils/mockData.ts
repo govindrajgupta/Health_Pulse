@@ -92,7 +92,7 @@ export const mockStressQuestions: StressQuestion[] = [
 export const generateMockStressData = (): StressData[] => {
   const stressData: StressData[] = [];
   
-  for (let i = 0; i < 7; i++) {
+  for (let i = 0; i < 180; i++) {
     const date = subDays(today, i);
     
     stressData.push({
@@ -130,7 +130,7 @@ export const generateMockMealEntries = (): MealEntry[] => {
   const mealEntries: MealEntry[] = [];
   const mealTypes: Array<'breakfast' | 'lunch' | 'dinner' | 'snack'> = ['breakfast', 'lunch', 'dinner', 'snack'];
   
-  for (let i = 0; i < 7; i++) {
+  for (let i = 0; i < 180; i++) {
     const date = subDays(today, i);
     
     // Generate 3-4 meals per day
@@ -183,7 +183,7 @@ const workoutTypes = [
 export const generateMockActivityData = (): ActivityData[] => {
   const activityData: ActivityData[] = [];
   
-  for (let i = 0; i < 7; i++) {
+  for (let i = 0; i < 180; i++) {
     const date = subDays(today, i);
     const steps = getRandomNumber(5000, 12000);
     const distance = +(steps / 1300).toFixed(2); // Approximate km based on steps
@@ -232,7 +232,7 @@ export const generateMockActivityData = (): ActivityData[] => {
 export const generateMockSleepData = (): SleepData[] => {
   const sleepData: SleepData[] = [];
   
-  for (let i = 0; i < 7; i++) {
+  for (let i = 0; i < 180; i++) {
     const date = subDays(today, i);
     const bedTime = subHours(date, getRandomNumber(8, 10)); // 8-10 hours before wakeup
     const wakeTime = addHours(date, 7); // Around 7 AM
@@ -286,49 +286,23 @@ export const generateMockHeartRiskData = (): HeartRiskData => {
   };
 };
 
-// Generate mock notifications
+let cachedNotifications: Notification[] | null = null;
 export const generateMockNotifications = (): Notification[] => {
-  return [
-    {
-      id: 'notif-1',
-      userId: MOCK_USER_ID,
-      type: 'reminder',
-      title: 'Time to log your meals',
-      message: "Don't forget to record what you've eaten today for accurate nutrition tracking.",
-      date: subHours(new Date(), 2),
-      read: false
-    },
-    {
-      id: 'notif-2',
-      userId: MOCK_USER_ID,
-      type: 'achievement',
-      title: 'Step Goal Reached!',
-      message: "Congratulations! You've reached your daily step goal of 10,000 steps.",
-      date: subHours(new Date(), 5),
-      read: true
-    },
-    {
-      id: 'notif-3',
-      userId: MOCK_USER_ID,
-      type: 'insight',
-      title: 'Sleep Pattern Analysis',
-      message: "Your sleep quality has improved by 15% this week. Keep maintaining your regular sleep schedule!",
-      date: subDays(new Date(), 1),
-      read: false,
-      actionURL: '/sleep'
-    },
-    {
-      id: 'notif-4',
-      userId: MOCK_USER_ID,
-      type: 'alert',
-      title: 'High Stress Detected',
-      message: "Your recent stress levels have been elevated. Consider trying some relaxation techniques.",
-      date: subHours(new Date(), 12),
-      read: false,
-      actionURL: '/stress'
-    }
-  ];
+  if (!cachedNotifications) {
+    const defaultDate = new Date();
+    cachedNotifications = [
+      { id: "notif-1", userId: MOCK_USER_ID, type: "reminder", title: "Time to log your meals", message: "Don't forget to record what you've eaten today for accurate nutrition tracking.", date: subHours(defaultDate, 2), read: false },
+      { id: "notif-2", userId: MOCK_USER_ID, type: "achievement", title: "Step Goal Reached!", message: "Congratulations! You've reached your daily step goal of 10,000 steps.", date: subHours(defaultDate, 5), read: false },
+      { id: "notif-3", userId: MOCK_USER_ID, type: "insight", title: "Sleep Pattern Analysis", message: "Your sleep quality has improved by 15% this week. Keep maintaining your regular sleep schedule!", date: subHours(defaultDate, 9), read: false, actionURL: "/sleep" },
+      { id: "notif-4", userId: MOCK_USER_ID, type: "alert", title: "High Stress Detected", message: "Your recent stress levels have been elevated. Consider trying some relaxation techniques.", date: subHours(defaultDate, 22), read: false, actionURL: "/stress" }
+    ];
+  }
+  return cachedNotifications;
 };
+export const markNotificationAsRead = (id: string) => { if(cachedNotifications){ const n = cachedNotifications.find(x => x.id === id); if(n) n.read = true; } };
+export const markAllNotificationsAsRead = () => { if(cachedNotifications){ cachedNotifications.forEach(n => n.read = true); } };
+export const removeNotification = (id: string) => { if(cachedNotifications){ cachedNotifications = cachedNotifications.filter(x => x.id !== id); } };
+export const clearAllNotifications = () => { cachedNotifications = []; };
 
 // Generate mock health summary for dashboard
 export const generateMockHealthSummary = (): HealthSummary => {
@@ -406,3 +380,4 @@ export const generateMockChartData = (metric: string): ChartData => {
     ]
   };
 };
+

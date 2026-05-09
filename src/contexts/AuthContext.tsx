@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { User } from '../types';
 import { supabase } from '../lib/supabase';
+import type { Session } from '@supabase/supabase-js';
 
 interface AuthContextType {
   user: User | null;
@@ -13,23 +14,39 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+function mapSessionUser(session: Session | null): User | null {
+  if (!session?.user) return null;
+  const u = session.user;
+  return {
+    id: u.id,
+    email: u.email!,
+    displayName: u.user_metadata?.displayName || u.user_metadata?.display_name || null,
+    photoURL: u.user_metadata?.avatar_url || null,
+    createdAt: new Date(u.created_at),
+    healthProfile: null,
+  };
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
 
   useEffect(() => {
-    // Get initial session
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (session?.user) {
-        setUser({
-          id: session.user.id,
-          email: session.user.email!,
-          displayName: session.user.user_metadata.displayName || null,
-          photoURL: session.user.user_metadata.avatar_url || null,
-          createdAt: new Date(session.user.created_at),
-          healthProfile: null
-        });
+    // Get initial session and validate it
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
+      if (session) {
+        // Validate the session is still valid by trying to get the user
+        const { data: { user: authUser }, error } = await supabase.auth.getUser();
+        if (error || !authUser) {
+          // Stale session — user was deleted. Clear it.
+          console.warn('Stale session detected, clearing...');
+          await supabase.auth.signOut();
+          setUser(null);
+          setLoading(false);
+          return;
+        }
       }
+      setUser(mapSessionUser(session));
       setLoading(false);
     });
 
@@ -37,18 +54,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (session?.user) {
-        setUser({
-          id: session.user.id,
-          email: session.user.email!,
-          displayName: session.user.user_metadata.displayName || null,
-          photoURL: session.user.user_metadata.avatar_url || null,
-          createdAt: new Date(session.user.created_at),
-          healthProfile: null
-        });
-      } else {
-        setUser(null);
-      }
+      setUser(mapSessionUser(session));
       setLoading(false);
     });
 
@@ -74,7 +80,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const register = async (email: string, password: string, displayName: string) => {
     setLoading(true);
     try {
-      const { error } = await supabase.auth.signUp({
+      const { data, error } = await supabase.auth.signUp({
         email,
         password,
         options: {
@@ -84,6 +90,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         },
       });
       if (error) throw error;
+
+      // If Supabase requires email confirmation, session will be null.
+      // Auto-confirm via direct DB and then sign in.
+      if (data.user && !data.session) {
+        // Auto-confirm the user via a direct Supabase SQL call
+        await supabase.rpc('confirm_user_email', { user_email: email }).catch(() => {});
+        
+        // Now sign in with the credentials
+        const { error: signInError } = await supabase.auth.signInWithPassword({
+          email,
+          password,
+        });
+        if (signInError) {
+          throw new Error(
+            'Account created but auto-login failed. Please try signing in manually.'
+          );
+        }
+      }
     } catch (error) {
       console.error('Registration error:', error);
       throw error;

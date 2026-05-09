@@ -1,659 +1,372 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
-  Utensils, 
-  Plus, 
-  BarChart, 
-  Calendar, 
-  Camera, 
-  PieChart,
-  Zap,
-  Coffee,
-  Soup,
-  Apple,
-  MoreHorizontal,
-  ArrowUpRight,
-  ArrowDownRight,
-  Search
+  Utensils, Plus, Calendar, PieChart, Coffee, Soup, Apple,
+  Search, ArrowLeft, Loader, Sparkles, X, Send
 } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { useAuth } from '../../contexts/AuthContext';
+import { fetchMeals, saveMeal } from '../../lib/supabaseDataService';
+import { sendChatMessage, ChatMessage, generateDietRecommendations, HealthContext } from '../../lib/aiService';
 import Chart from '../common/Chart';
 import ProgressCircle from '../common/ProgressCircle';
-import { generateMockMealEntries, generateMockChartData } from '../../utils/mockData';
-import { MealEntry } from '../../types';
+import { format } from 'date-fns';
+
+interface FoodItem {
+  name: string;
+  portion: number;
+  calories: number;
+  protein: number;
+  carbs: number;
+  fat: number;
+}
 
 const DietPage: React.FC = () => {
-  const [selectedDate, setSelectedDate] = useState(new Date());
+  const { user } = useAuth();
+  const [meals, setMeals] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
   const [addMealMode, setAddMealMode] = useState(false);
+  const [selectedDate, setSelectedDate] = useState(new Date());
   
-  // Get mock data
-  const allMealEntries = generateMockMealEntries();
-  const caloriesChartData = generateMockChartData('calories');
+  // AI food analysis
+  const [customFoodInput, setCustomFoodInput] = useState('');
+  const [aiAnalyzing, setAiAnalyzing] = useState(false);
+  const [analyzedFoods, setAnalyzedFoods] = useState<FoodItem[]>([]);
   
-  // Filter entries for selected date
-  const dateString = selectedDate.toDateString();
-  const mealsForSelectedDate = allMealEntries.filter(
-    meal => meal.date.toDateString() === dateString
-  );
-  
-  // Calculate totals for the day
-  const dailyTotals = mealsForSelectedDate.reduce(
-    (acc, meal) => {
-      acc.calories += meal.totalCalories;
-      acc.protein += meal.totalProtein;
-      acc.carbs += meal.totalCarbs;
-      acc.fat += meal.totalFat;
-      return acc;
-    },
-    { calories: 0, protein: 0, carbs: 0, fat: 0 }
-  );
-  
-  // Calculate percentages for macros
-  const totalGrams = dailyTotals.protein + dailyTotals.carbs + dailyTotals.fat;
-  const proteinPercentage = totalGrams > 0 ? Math.round((dailyTotals.protein / totalGrams) * 100) : 0;
-  const carbsPercentage = totalGrams > 0 ? Math.round((dailyTotals.carbs / totalGrams) * 100) : 0;
-  const fatPercentage = totalGrams > 0 ? Math.round((dailyTotals.fat / totalGrams) * 100) : 0;
-  
-  // Daily calorie goal (mock)
+  // Add meal form
+  const [mealType, setMealType] = useState('lunch');
+  const [addedFoods, setAddedFoods] = useState<FoodItem[]>([]);
+  const [saving, setSaving] = useState(false);
+
+  // AI diet recommendations
+  const [aiRecommendation, setAiRecommendation] = useState<string | null>(null);
+  const [aiRecLoading, setAiRecLoading] = useState(false);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    setLoading(true);
+    fetchMeals(user.id, 500).then(({ data }) => {
+      setMeals(data);
+      setLoading(false);
+    });
+  }, [user?.id]);
+
+  // Filter meals for selected date
+  const dateStr = format(selectedDate, 'yyyy-MM-dd');
+  const mealsForDate = meals.filter(m => format(new Date(m.recorded_at), 'yyyy-MM-dd') === dateStr);
+
+  // Daily totals
+  const daily = mealsForDate.reduce((acc, m) => ({
+    calories: acc.calories + (m.total_calories || 0),
+    protein: acc.protein + (m.total_protein || 0),
+    carbs: acc.carbs + (m.total_carbs || 0),
+    fat: acc.fat + (m.total_fat || 0),
+  }), { calories: 0, protein: 0, carbs: 0, fat: 0 });
+
   const calorieGoal = 2000;
-  const caloriePercentage = Math.min(Math.round((dailyTotals.calories / calorieGoal) * 100), 100);
-  
-  // Function to get meal type icon
-  const getMealTypeIcon = (mealType: string) => {
-    switch (mealType) {
-      case 'breakfast':
-        return <Coffee size={18} />;
-      case 'lunch':
-        return <Soup size={18} />;
-      case 'dinner':
-        return <Utensils size={18} />;
-      case 'snack':
-        return <Apple size={18} />;
-      default:
-        return <Utensils size={18} />;
+  const calPct = Math.min(Math.round((daily.calories / calorieGoal) * 100), 100);
+  const totalG = daily.protein + daily.carbs + daily.fat || 1;
+  const protPct = Math.round((daily.protein / totalG) * 100);
+  const carbPct = Math.round((daily.carbs / totalG) * 100);
+  const fatPct = Math.round((daily.fat / totalG) * 100);
+
+  // Weekly calories chart (last 14 days)
+  const last14 = meals.reduce((acc: Record<string, number>, m) => {
+    const d = format(new Date(m.recorded_at), 'MMM d');
+    acc[d] = (acc[d] || 0) + (m.total_calories || 0);
+    return acc;
+  }, {});
+  const chartDays = [];
+  for (let i = 13; i >= 0; i--) {
+    const d = new Date(); d.setDate(d.getDate() - i);
+    const label = format(d, 'MMM d');
+    chartDays.push({ label, value: last14[label] || 0 });
+  }
+  const caloriesChart = {
+    labels: chartDays.map(d => d.label),
+    datasets: [{
+      label: 'Calories', data: chartDays.map(d => d.value),
+      borderColor: '#f59e0b', backgroundColor: '#f59e0b20', fill: true, tension: 0.4, borderWidth: 2,
+    }],
+  };
+
+  // AI Food Analysis — send food description to GPT-5.4
+  const analyzeFood = async () => {
+    if (!customFoodInput.trim() || aiAnalyzing) return;
+    setAiAnalyzing(true);
+    setAnalyzedFoods([]);
+    try {
+      const messages: ChatMessage[] = [{
+        role: 'user',
+        content: `Analyze this food and estimate its nutritional content. Return ONLY a JSON array of objects with these exact fields: name, portion (grams), calories, protein (grams), carbs (grams), fat (grams). No explanation, no markdown, just the JSON array.
+
+Food: "${customFoodInput}"
+
+Example output format: [{"name":"Paneer Butter Masala","portion":200,"calories":350,"protein":15,"carbs":12,"fat":25}]`,
+      }];
+      const response = await sendChatMessage(messages);
+      // Parse JSON from response
+      const jsonMatch = response.match(/\[[\s\S]*\]/);
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0]) as FoodItem[];
+        setAnalyzedFoods(parsed);
+      } else {
+        console.error('Could not parse AI response:', response);
+      }
+    } catch (err) {
+      console.error('Food analysis error:', err);
     }
+    setAiAnalyzing(false);
   };
-  
-  // Function to get meal type background color
-  const getMealTypeColor = (mealType: string) => {
-    switch (mealType) {
-      case 'breakfast':
-        return 'bg-amber-50 text-amber-600';
-      case 'lunch':
-        return 'bg-blue-50 text-blue-600';
-      case 'dinner':
-        return 'bg-purple-50 text-purple-600';
-      case 'snack':
-        return 'bg-green-50 text-green-600';
-      default:
-        return 'bg-slate-50 text-slate-600';
-    }
+
+  const addFoodToMeal = (food: FoodItem) => {
+    setAddedFoods(prev => [...prev, food]);
+    setAnalyzedFoods(prev => prev.filter(f => f.name !== food.name));
+    setCustomFoodInput('');
   };
-  
-  // Function to render a meal entry
-  const renderMealEntry = (meal: MealEntry) => {
-    return (
-      <div key={meal.id} className="bg-white rounded-lg border border-slate-200 overflow-hidden mb-4 hover:shadow-md transition-shadow">
-        <div className="p-4">
-          <div className="flex justify-between items-start">
-            <div className="flex items-center">
-              <div className={`p-2 rounded-lg ${getMealTypeColor(meal.mealType)} mr-3`}>
-                {getMealTypeIcon(meal.mealType)}
-              </div>
-              <div>
-                <h4 className="font-medium text-slate-800 capitalize">
-                  {meal.mealType}
-                </h4>
-                <p className="text-sm text-slate-500">
-                  {meal.date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                </p>
-              </div>
-            </div>
-            
-            <div className="flex items-center space-x-1">
-              <button className="p-1.5 rounded-full hover:bg-slate-100">
-                <MoreHorizontal size={18} className="text-slate-500" />
-              </button>
-            </div>
-          </div>
-          
-          <div className="mt-3 pt-3 border-t border-slate-100">
-            <div className="flex justify-between items-center mb-3">
-              <div className="flex space-x-4 text-sm">
-                <div>
-                  <span className="text-slate-500">Calories:</span>{' '}
-                  <span className="font-medium text-slate-700">{meal.totalCalories}</span>
-                </div>
-                <div>
-                  <span className="text-slate-500">Protein:</span>{' '}
-                  <span className="font-medium text-slate-700">{meal.totalProtein}g</span>
-                </div>
-                <div>
-                  <span className="text-slate-500">Carbs:</span>{' '}
-                  <span className="font-medium text-slate-700">{meal.totalCarbs}g</span>
-                </div>
-                <div>
-                  <span className="text-slate-500">Fat:</span>{' '}
-                  <span className="font-medium text-slate-700">{meal.totalFat}g</span>
-                </div>
-              </div>
-              
-              <div className="px-2 py-1 bg-blue-50 text-blue-700 rounded-full text-xs font-medium">
-                {meal.nutritionalScore}/10 Score
-              </div>
-            </div>
-            
-            <div className="mt-2">
-              <h5 className="text-sm font-medium text-slate-700 mb-2">Food Items</h5>
-              <div className="text-sm">
-                {meal.foods.map((food, index) => (
-                  <div 
-                    key={food.id} 
-                    className={`flex justify-between py-1.5 ${
-                      index < meal.foods.length - 1 ? 'border-b border-slate-100' : ''
-                    }`}
-                  >
-                    <div className="text-slate-700">{food.name} ({food.portion}g)</div>
-                    <div className="text-slate-500">{food.calories} cal</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
+
+  const removeFoodFromMeal = (idx: number) => {
+    setAddedFoods(prev => prev.filter((_, i) => i !== idx));
   };
+
+  const handleSaveMeal = async () => {
+    if (!user?.id || addedFoods.length === 0) return;
+    setSaving(true);
+    const totalCal = addedFoods.reduce((s, f) => s + f.calories, 0);
+    const totalProt = addedFoods.reduce((s, f) => s + f.protein, 0);
+    const totalCarb = addedFoods.reduce((s, f) => s + f.carbs, 0);
+    const totalFat = addedFoods.reduce((s, f) => s + f.fat, 0);
+
+    await saveMeal(user.id, {
+      meal_type: mealType,
+      total_calories: totalCal,
+      total_protein: totalProt,
+      total_carbs: totalCarb,
+      total_fat: totalFat,
+      nutritional_score: 7,
+      recorded_at: selectedDate.toISOString(),
+      foods: addedFoods,
+    });
+
+    // Refresh
+    const { data } = await fetchMeals(user.id, 500);
+    setMeals(data);
+    setAddedFoods([]);
+    setAddMealMode(false);
+    setSaving(false);
+  };
+
+  const handleAiRecommendation = async () => {
+    if (aiRecLoading) return;
+    setAiRecLoading(true);
+    try {
+      const recentMeals = meals.slice(0, 20).map(m => ({
+        meal_type: m.meal_type, total_calories: m.total_calories,
+        total_protein: m.total_protein, total_carbs: m.total_carbs, total_fat: m.total_fat,
+      }));
+      const ctx: HealthContext = {};
+      const result = await generateDietRecommendations(recentMeals, ctx);
+      setAiRecommendation(result);
+    } catch { setAiRecommendation('Unable to generate recommendations.'); }
+    setAiRecLoading(false);
+  };
+
+  const getMealIcon = (type: string) => {
+    switch (type) { case 'breakfast': return <Coffee size={18} />; case 'lunch': return <Soup size={18} />; case 'snack': return <Apple size={18} />; default: return <Utensils size={18} />; }
+  };
+  const getMealColor = (type: string) => {
+    switch (type) { case 'breakfast': return 'bg-amber-50 text-amber-600'; case 'lunch': return 'bg-blue-50 text-blue-600'; case 'dinner': return 'bg-purple-50 text-purple-600'; case 'snack': return 'bg-green-50 text-green-600'; default: return 'bg-slate-50 text-slate-600'; }
+  };
+
+  const renderMd = (text: string) => text.split('\n').map((line, i) => {
+    let p = line.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+    if (p.startsWith('- ') || p.startsWith('• ')) return <p key={i} className="ml-3 mb-1" dangerouslySetInnerHTML={{ __html: '• ' + p.slice(2) }} />;
+    if (!p.trim()) return <br key={i} />;
+    return <p key={i} className="mb-1" dangerouslySetInnerHTML={{ __html: p }} />;
+  });
+
+  if (loading) return <div className="flex items-center justify-center h-64"><Loader className="animate-spin text-amber-600" size={32} /></div>;
 
   return (
     <div className="max-w-7xl mx-auto">
-      {/* Page header */}
       <header className="mb-6">
-        <h1 className="text-2xl font-bold text-slate-800 mb-2">
-          Diet Record
-        </h1>
-        <p className="text-slate-600">
-          Track your nutrition and maintain a healthy diet
-        </p>
+        <Link to="/" className="text-blue-600 hover:text-blue-800 flex items-center mb-2 text-sm"><ArrowLeft size={16} className="mr-1" /> Dashboard</Link>
+        <h1 className="text-2xl font-bold text-slate-800">Diet Record</h1>
+        <p className="text-slate-500">Track your nutrition with AI-powered food analysis</p>
       </header>
 
-      {/* Main content grid */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Left sidebar - Daily Summary */}
+        {/* Left — Daily Summary */}
         <div>
-          <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 mb-6">
+          <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4 mb-6">
             <div className="flex justify-between items-center mb-4">
-              <h3 className="text-lg font-semibold text-slate-800">Daily Summary</h3>
-              
-              <div className="flex items-center">
-                <button 
-                  className="p-1.5 rounded-md text-slate-500 hover:text-slate-700 hover:bg-slate-100 mr-1"
-                  aria-label="Previous Day"
-                  onClick={() => {
-                    const newDate = new Date(selectedDate);
-                    newDate.setDate(newDate.getDate() - 1);
-                    setSelectedDate(newDate);
-                  }}
-                >
-                  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M15 18l-6-6 6-6"></path>
-                  </svg>
-                </button>
-                
-                <span className="text-sm font-medium text-slate-700">
-                  {selectedDate.toLocaleDateString('en-US', {
-                    weekday: 'short',
-                    month: 'short',
-                    day: 'numeric'
-                  })}
-                </span>
-                
-                <button 
-                  className="p-1.5 rounded-md text-slate-500 hover:text-slate-700 hover:bg-slate-100 ml-1"
-                  aria-label="Next Day"
-                  onClick={() => {
-                    const newDate = new Date(selectedDate);
-                    newDate.setDate(newDate.getDate() + 1);
-                    setSelectedDate(newDate);
-                  }}
-                >
-                  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M9 18l6-6-6-6"></path>
-                  </svg>
-                </button>
+              <h3 className="font-semibold text-slate-800">Daily Summary</h3>
+              <div className="flex items-center gap-1">
+                <button onClick={() => { const d = new Date(selectedDate); d.setDate(d.getDate() - 1); setSelectedDate(d); }} className="p-1 hover:bg-slate-100 rounded">←</button>
+                <span className="text-sm font-medium px-2">{format(selectedDate, 'MMM d')}</span>
+                <button onClick={() => { const d = new Date(selectedDate); d.setDate(d.getDate() + 1); setSelectedDate(d); }} className="p-1 hover:bg-slate-100 rounded">→</button>
               </div>
             </div>
-            
-            {/* Calories progress */}
-            <div className="mb-6">
-              <div className="flex justify-between items-end mb-1">
-                <h4 className="text-sm font-medium text-slate-700">Calories</h4>
-                <div className="text-sm">
-                  <span className="font-medium text-slate-800">{dailyTotals.calories}</span>
-                  <span className="text-slate-500"> / {calorieGoal}</span>
-                </div>
-              </div>
-              
-              <div className="w-full h-2 bg-slate-200 rounded-full overflow-hidden">
-                <div 
-                  className="h-full bg-blue-500 rounded-full"
-                  style={{ width: `${caloriePercentage}%` }}
-                ></div>
-              </div>
-              
-              <div className="flex items-center justify-between text-xs mt-1">
-                <span className="text-slate-500">0</span>
-                <span className={caloriePercentage > 100 ? 'text-red-500 font-medium' : 'text-slate-500'}>
-                  {caloriePercentage}%
-                </span>
-              </div>
-            </div>
-            
-            {/* Macronutrients */}
-            <h4 className="text-sm font-medium text-slate-700 mb-3">Macronutrients</h4>
-            
-            <div className="grid grid-cols-3 gap-2 mb-4">
-              <div className="bg-blue-50 p-3 rounded-lg">
-                <p className="text-xs text-blue-700 mb-1">Protein</p>
-                <p className="font-medium text-slate-800">{dailyTotals.protein}g</p>
-                <p className="text-xs text-slate-500">{proteinPercentage}%</p>
-              </div>
-              
-              <div className="bg-amber-50 p-3 rounded-lg">
-                <p className="text-xs text-amber-700 mb-1">Carbs</p>
-                <p className="font-medium text-slate-800">{dailyTotals.carbs}g</p>
-                <p className="text-xs text-slate-500">{carbsPercentage}%</p>
-              </div>
-              
-              <div className="bg-indigo-50 p-3 rounded-lg">
-                <p className="text-xs text-indigo-700 mb-1">Fat</p>
-                <p className="font-medium text-slate-800">{dailyTotals.fat}g</p>
-                <p className="text-xs text-slate-500">{fatPercentage}%</p>
-              </div>
-            </div>
-            
-            {/* Macro distribution pie chart */}
+
             <div className="flex justify-center mb-4">
-              <div className="relative w-32 h-32">
-                <div className="absolute inset-0 flex items-center justify-center">
-                  <svg viewBox="0 0 36 36" className="w-32 h-32 transform -rotate-90">
-                    {/* Background circle */}
-                    <circle cx="18" cy="18" r="16" fill="none" stroke="#e2e8f0" strokeWidth="3"></circle>
-                    
-                    {/* Protein segment */}
-                    <circle 
-                      cx="18" 
-                      cy="18" 
-                      r="16" 
-                      fill="none" 
-                      stroke="#3b82f6" 
-                      strokeWidth="3" 
-                      strokeDasharray={`${proteinPercentage} ${100 - proteinPercentage}`}
-                    ></circle>
-                    
-                    {/* Carbs segment */}
-                    <circle 
-                      cx="18" 
-                      cy="18" 
-                      r="16" 
-                      fill="none" 
-                      stroke="#f59e0b" 
-                      strokeWidth="3" 
-                      strokeDasharray={`${carbsPercentage} ${100 - carbsPercentage}`}
-                      strokeDashoffset={`${-proteinPercentage}`}
-                    ></circle>
-                    
-                    {/* Fat segment */}
-                    <circle 
-                      cx="18" 
-                      cy="18" 
-                      r="16" 
-                      fill="none" 
-                      stroke="#818cf8" 
-                      strokeWidth="3" 
-                      strokeDasharray={`${fatPercentage} ${100 - fatPercentage}`}
-                      strokeDashoffset={`${-(proteinPercentage + carbsPercentage)}`}
-                    ></circle>
-                  </svg>
-                  
-                  <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
-                    <span className="text-xs text-slate-500">Total</span>
-                    <span className="text-lg font-bold text-slate-800">{totalGrams}g</span>
-                  </div>
-                </div>
-              </div>
+              <ProgressCircle percentage={calPct} size={120} progressColor={calPct > 100 ? '#ef4444' : '#3b82f6'}>
+                <div className="text-center"><div className="text-lg font-bold">{daily.calories}</div><div className="text-[10px] text-slate-500">/ {calorieGoal}</div></div>
+              </ProgressCircle>
             </div>
-            
-            <div className="flex justify-center mb-2">
-              <div className="flex space-x-4 text-xs">
-                <div className="flex items-center">
-                  <div className="w-3 h-3 bg-blue-500 rounded-full mr-1"></div>
-                  <span>Protein</span>
-                </div>
-                <div className="flex items-center">
-                  <div className="w-3 h-3 bg-amber-500 rounded-full mr-1"></div>
-                  <span>Carbs</span>
-                </div>
-                <div className="flex items-center">
-                  <div className="w-3 h-3 bg-indigo-500 rounded-full mr-1"></div>
-                  <span>Fat</span>
-                </div>
-              </div>
+
+            <div className="grid grid-cols-3 gap-2 mb-4">
+              <div className="bg-blue-50 p-3 rounded-lg text-center"><p className="text-xs text-blue-700">Protein</p><p className="font-bold text-slate-800">{daily.protein}g</p><p className="text-xs text-slate-500">{protPct}%</p></div>
+              <div className="bg-amber-50 p-3 rounded-lg text-center"><p className="text-xs text-amber-700">Carbs</p><p className="font-bold text-slate-800">{daily.carbs}g</p><p className="text-xs text-slate-500">{carbPct}%</p></div>
+              <div className="bg-indigo-50 p-3 rounded-lg text-center"><p className="text-xs text-indigo-700">Fat</p><p className="font-bold text-slate-800">{daily.fat}g</p><p className="text-xs text-slate-500">{fatPct}%</p></div>
             </div>
-            
-            {/* Add meal button */}
-            <div className="mt-4">
-              <button 
-                className="btn btn-primary w-full"
-                onClick={() => setAddMealMode(true)}
-              >
-                <Plus size={16} className="mr-1" />
-                Add Meal
-              </button>
-            </div>
+
+            <button onClick={() => setAddMealMode(true)} className="btn btn-primary w-full"><Plus size={16} className="mr-1" /> Add Meal</button>
           </div>
-          
-          {/* Weekly trend */}
-          <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
-            <h3 className="text-lg font-semibold text-slate-800 mb-4">Weekly Trend</h3>
-            <Chart data={caloriesChartData} height={200} />
+
+          <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
+            <h3 className="font-semibold text-slate-800 mb-4">Calorie Trend (14 Days)</h3>
+            <Chart data={caloriesChart} height={200} />
           </div>
         </div>
-        
-        {/* Main content - Meal entries */}
-        <div className="lg:col-span-2">
-          {/* Meal list */}
-          <div className="bg-white rounded-xl shadow-sm border border-slate-200 mb-6">
+
+        {/* Main — Meals + AI */}
+        <div className="lg:col-span-2 space-y-6">
+          {/* Today's meals */}
+          <div className="bg-white rounded-xl border border-slate-200 shadow-sm">
             <div className="flex items-center justify-between p-4 border-b border-slate-200">
-              <h3 className="text-lg font-semibold text-slate-800">Today's Meals</h3>
-              
-              <div className="flex items-center">
-                <div className="relative mr-2">
-                  <Search size={16} className="absolute left-2.5 top-2.5 text-slate-400" />
-                  <input
-                    type="text"
-                    placeholder="Search meals..."
-                    className="input-sm pl-8 py-1.5 text-sm border rounded-md border-slate-300 focus:border-blue-500 focus:ring-blue-500"
-                  />
-                </div>
-                
-                <button
-                  className="p-1.5 rounded-md text-slate-500 hover:text-slate-700 hover:bg-slate-100 mr-1"
-                  aria-label="View Calendar"
-                >
-                  <Calendar size={18} />
-                </button>
-                
-                <button
-                  className="p-1.5 rounded-md text-slate-500 hover:text-slate-700 hover:bg-slate-100 mr-1"
-                  aria-label="View Chart"
-                >
-                  <BarChart size={18} />
-                </button>
-                
-                <button
-                  className="btn btn-primary inline-flex items-center text-sm py-1.5"
-                  onClick={() => setAddMealMode(true)}
-                >
-                  <Plus size={16} className="mr-1" />
-                  Add Meal
-                </button>
-              </div>
+              <h3 className="font-semibold text-slate-800">Meals for {format(selectedDate, 'MMM d, yyyy')}</h3>
+              <button onClick={() => setAddMealMode(true)} className="text-sm text-blue-600 hover:text-blue-800 font-medium">+ Add Meal</button>
             </div>
-            
             <div className="p-4">
-              {mealsForSelectedDate.length > 0 ? (
-                mealsForSelectedDate.map(meal => renderMealEntry(meal))
-              ) : (
-                <div className="text-center py-8">
-                  <div className="inline-block p-3 bg-slate-50 rounded-full mb-3">
-                    <Utensils size={24} className="text-slate-400" />
+              {mealsForDate.length > 0 ? mealsForDate.map((meal: any) => (
+                <div key={meal.id} className="border border-slate-200 rounded-lg p-4 mb-3 hover:shadow-sm transition-shadow">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-3">
+                      <div className={`p-2 rounded-lg ${getMealColor(meal.meal_type)}`}>{getMealIcon(meal.meal_type)}</div>
+                      <div>
+                        <h4 className="font-medium text-slate-800 capitalize">{meal.meal_type}</h4>
+                        <p className="text-xs text-slate-500">{format(new Date(meal.recorded_at), 'h:mm a')}</p>
+                      </div>
+                    </div>
+                    <span className="text-sm font-bold text-slate-800">{meal.total_calories} kcal</span>
                   </div>
-                  <h4 className="text-lg font-medium text-slate-700 mb-2">No meals logged yet</h4>
-                  <p className="text-slate-500 mb-4">
-                    Start tracking your nutrition by adding your meals for the day
-                  </p>
-                  <button 
-                    className="btn btn-primary"
-                    onClick={() => setAddMealMode(true)}
-                  >
-                    <Plus size={16} className="mr-1" />
-                    Add Your First Meal
-                  </button>
+                  <div className="flex gap-4 text-xs text-slate-500 mb-2">
+                    <span>P: {meal.total_protein}g</span><span>C: {meal.total_carbs}g</span><span>F: {meal.total_fat}g</span>
+                  </div>
+                  {meal.food_items?.length > 0 && (
+                    <div className="border-t border-slate-100 pt-2 mt-2">
+                      {meal.food_items.map((f: any, i: number) => (
+                        <div key={i} className="flex justify-between text-sm py-1"><span className="text-slate-700">{f.name} ({f.portion}g)</span><span className="text-slate-500">{f.calories} cal</span></div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )) : (
+                <div className="text-center py-8">
+                  <Utensils size={32} className="text-slate-300 mx-auto mb-3" />
+                  <p className="text-slate-500">No meals logged for this date</p>
+                  <button onClick={() => setAddMealMode(true)} className="mt-3 btn btn-primary text-sm"><Plus size={14} className="mr-1" /> Add Meal</button>
                 </div>
               )}
             </div>
           </div>
-          
-          {/* Nutrition insights */}
-          <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
+
+          {/* AI Diet Recommendations */}
+          <div className="bg-gradient-to-r from-amber-500 to-orange-600 rounded-2xl p-6 text-white">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-semibold text-slate-800">Nutrition Insights</h3>
-              <span className="px-2 py-1 bg-blue-100 text-blue-700 rounded-full text-xs font-medium">
-                AI Generated
-              </span>
+              <h3 className="text-xl font-bold flex items-center"><Sparkles className="mr-2" /> AI Diet Recommendations <span className="ml-2 text-xs font-normal bg-white/20 px-2 py-0.5 rounded-full">GPT-5.4</span></h3>
+              <button onClick={handleAiRecommendation} disabled={aiRecLoading} className="text-sm bg-white/20 hover:bg-white/30 px-4 py-2 rounded-lg transition-colors flex items-center gap-2">
+                {aiRecLoading ? <><Loader className="animate-spin" size={14} /> Analyzing...</> : <><Sparkles size={14} /> {aiRecommendation ? 'Regenerate' : 'Analyze Diet'}</>}
+              </button>
             </div>
-            
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="border border-slate-200 rounded-lg p-4 hover:shadow-md transition-shadow">
-                <div className="flex items-start mb-2">
-                  <div className="p-2 rounded-lg bg-green-50 mr-2">
-                    <ArrowUpRight size={18} className="text-green-600" />
-                  </div>
-                  <div>
-                    <h4 className="font-medium text-slate-800">Excellent Protein Intake</h4>
-                    <p className="text-sm text-slate-500">
-                      Your protein intake has been consistently within the recommended range.
-                    </p>
-                  </div>
-                </div>
-                <div className="pl-9">
-                  <p className="text-xs text-slate-600 mt-1">
-                    Adequate protein is essential for muscle maintenance and recovery.
-                  </p>
-                </div>
-              </div>
-              
-              <div className="border border-slate-200 rounded-lg p-4 hover:shadow-md transition-shadow">
-                <div className="flex items-start mb-2">
-                  <div className="p-2 rounded-lg bg-red-50 mr-2">
-                    <ArrowDownRight size={18} className="text-red-600" />
-                  </div>
-                  <div>
-                    <h4 className="font-medium text-slate-800">High Added Sugar</h4>
-                    <p className="text-sm text-slate-500">
-                      Your added sugar intake has been above recommended levels.
-                    </p>
-                  </div>
-                </div>
-                <div className="pl-9">
-                  <p className="text-xs text-slate-600 mt-1">
-                    Try to limit processed foods and check nutrition labels for hidden sugars.
-                  </p>
-                </div>
-              </div>
-              
-              <div className="border border-slate-200 rounded-lg p-4 hover:shadow-md transition-shadow">
-                <div className="flex items-start mb-2">
-                  <div className="p-2 rounded-lg bg-blue-50 mr-2">
-                    <Zap size={18} className="text-blue-600" />
-                  </div>
-                  <div>
-                    <h4 className="font-medium text-slate-800">Hydration Reminder</h4>
-                    <p className="text-sm text-slate-500">
-                      Based on your activity level, aim for 2.5-3L of water daily.
-                    </p>
-                  </div>
-                </div>
-                <div className="pl-9">
-                  <p className="text-xs text-slate-600 mt-1">
-                    Proper hydration improves energy levels and aids digestion.
-                  </p>
-                </div>
-              </div>
-              
-              <div className="border border-slate-200 rounded-lg p-4 hover:shadow-md transition-shadow">
-                <div className="flex items-start mb-2">
-                  <div className="p-2 rounded-lg bg-purple-50 mr-2">
-                    <PieChart size={18} className="text-purple-600" />
-                  </div>
-                  <div>
-                    <h4 className="font-medium text-slate-800">Diverse Diet</h4>
-                    <p className="text-sm text-slate-500">
-                      You've consumed 15 different types of foods this week.
-                    </p>
-                  </div>
-                </div>
-                <div className="pl-9">
-                  <p className="text-xs text-slate-600 mt-1">
-                    A diverse diet helps ensure you get a wide range of nutrients.
-                  </p>
-                </div>
-              </div>
-            </div>
+            {aiRecommendation ? (
+              <div className="bg-white/10 backdrop-blur-sm p-5 rounded-xl border border-white/20 text-white/95 text-sm">{renderMd(aiRecommendation)}</div>
+            ) : (
+              <p className="text-amber-100 text-sm">Click "Analyze Diet" to get AI-powered nutrition recommendations based on your recent meals.</p>
+            )}
           </div>
         </div>
       </div>
-      
-      {/* Add meal modal */}
+
+      {/* Add Meal Modal with AI Food Analysis */}
       {addMealMode && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50">
-          <div className="bg-white rounded-xl shadow-xl max-w-3xl w-full max-h-[90vh] overflow-y-auto">
+          <div className="bg-white rounded-xl shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
             <div className="p-4 border-b border-slate-200 flex justify-between items-center">
               <h3 className="text-lg font-semibold text-slate-800">Add Meal</h3>
-              <button 
-                className="p-1 rounded-full hover:bg-slate-100"
-                onClick={() => setAddMealMode(false)}
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-slate-500">
-                  <path d="M18 6L6 18M6 6l12 12"></path>
-                </svg>
-              </button>
+              <button onClick={() => { setAddMealMode(false); setAddedFoods([]); setAnalyzedFoods([]); }} className="p-1 rounded-full hover:bg-slate-100"><X size={20} className="text-slate-500" /></button>
             </div>
-            
+
             <div className="p-4">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-                <div>
-                  <label className="label">Meal Type</label>
-                  <select className="input">
-                    <option value="breakfast">Breakfast</option>
-                    <option value="lunch">Lunch</option>
-                    <option value="dinner">Dinner</option>
-                    <option value="snack">Snack</option>
-                  </select>
-                </div>
-                
-                <div>
-                  <label className="label">Date & Time</label>
-                  <input 
-                    type="datetime-local" 
-                    className="input"
-                    defaultValue={new Date().toISOString().slice(0, 16)}
-                  />
-                </div>
-              </div>
-              
               <div className="mb-4">
-                <div className="flex justify-between items-center mb-2">
-                  <label className="label mb-0">Food Items</label>
-                  <button className="text-sm text-blue-600 hover:text-blue-700">
-                    Scan barcode
+                <label className="block text-sm font-medium text-slate-700 mb-1">Meal Type</label>
+                <select value={mealType} onChange={e => setMealType(e.target.value)} className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500">
+                  <option value="breakfast">Breakfast</option><option value="lunch">Lunch</option><option value="dinner">Dinner</option><option value="snack">Snack</option>
+                </select>
+              </div>
+
+              {/* AI Food Analysis Input */}
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-slate-700 mb-1 flex items-center gap-1">
+                  <Sparkles size={14} className="text-blue-600" /> Describe Your Food (AI Analysis)
+                </label>
+                <div className="flex gap-2">
+                  <input type="text" value={customFoodInput} onChange={e => setCustomFoodInput(e.target.value)}
+                    onKeyDown={e => e.key === 'Enter' && analyzeFood()}
+                    placeholder='e.g. "2 rotis with dal and paneer curry" or "chicken biryani with raita"'
+                    className="flex-1 px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-sm" />
+                  <button onClick={analyzeFood} disabled={aiAnalyzing || !customFoodInput.trim()}
+                    className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white rounded-lg text-sm font-medium flex items-center gap-1">
+                    {aiAnalyzing ? <Loader className="animate-spin" size={14} /> : <Sparkles size={14} />}
+                    {aiAnalyzing ? 'Analyzing...' : 'Analyze'}
                   </button>
                 </div>
-                
-                <div className="relative mb-3">
-                  <Search size={16} className="absolute left-3 top-3 text-slate-400" />
-                  <input
-                    type="text"
-                    placeholder="Search for a food..."
-                    className="input pl-9"
-                  />
-                </div>
-                
-                <div className="border border-slate-200 rounded-lg divide-y divide-slate-200 mb-3">
-                  <div className="p-3 flex justify-between items-center">
-                    <div>
-                      <p className="font-medium text-slate-800">Oatmeal</p>
-                      <p className="text-xs text-slate-500">100g serving</p>
-                    </div>
-                    <div className="text-sm flex space-x-3">
-                      <span className="text-slate-500">150 cal</span>
-                      <span className="text-blue-600">Add</span>
-                    </div>
-                  </div>
-                  
-                  <div className="p-3 flex justify-between items-center">
-                    <div>
-                      <p className="font-medium text-slate-800">Banana</p>
-                      <p className="text-xs text-slate-500">118g (1 medium)</p>
-                    </div>
-                    <div className="text-sm flex space-x-3">
-                      <span className="text-slate-500">105 cal</span>
-                      <span className="text-blue-600">Add</span>
-                    </div>
-                  </div>
-                  
-                  <div className="p-3 flex justify-between items-center">
-                    <div>
-                      <p className="font-medium text-slate-800">Greek Yogurt</p>
-                      <p className="text-xs text-slate-500">170g serving</p>
-                    </div>
-                    <div className="text-sm flex space-x-3">
-                      <span className="text-slate-500">100 cal</span>
-                      <span className="text-blue-600">Add</span>
-                    </div>
-                  </div>
-                </div>
-                
-                <div className="text-sm text-center text-slate-500 mb-3">
-                  Can't find your food? <button className="text-blue-600">Add a custom food</button>
-                </div>
+                <p className="text-xs text-slate-500 mt-1">AI will estimate calories, protein, carbs, and fat for any food you describe</p>
               </div>
-              
+
+              {/* AI Analyzed Results */}
+              {analyzedFoods.length > 0 && (
+                <div className="mb-4 border border-blue-200 bg-blue-50 rounded-lg p-3">
+                  <p className="text-sm font-medium text-blue-800 mb-2 flex items-center gap-1"><Sparkles size={14} /> AI Analysis Results</p>
+                  {analyzedFoods.map((food, i) => (
+                    <div key={i} className="flex justify-between items-center py-2 border-b border-blue-100 last:border-b-0">
+                      <div>
+                        <p className="font-medium text-slate-800">{food.name}</p>
+                        <p className="text-xs text-slate-500">{food.portion}g • {food.calories} cal • P:{food.protein}g C:{food.carbs}g F:{food.fat}g</p>
+                      </div>
+                      <button onClick={() => addFoodToMeal(food)} className="px-3 py-1 bg-blue-600 text-white rounded-md text-sm hover:bg-blue-700">Add</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Added Foods */}
               <div className="mb-4">
-                <label className="label">Added Items</label>
-                <div className="border border-slate-200 rounded-lg min-h-20 p-3">
-                  <div className="text-center text-sm text-slate-500">
-                    No items added yet
+                <label className="block text-sm font-medium text-slate-700 mb-1">Added Items ({addedFoods.length})</label>
+                <div className="border border-slate-200 rounded-lg min-h-[60px] p-3">
+                  {addedFoods.length > 0 ? addedFoods.map((food, i) => (
+                    <div key={i} className="flex justify-between items-center py-1.5 border-b border-slate-100 last:border-b-0">
+                      <span className="text-sm text-slate-700">{food.name} ({food.portion}g) — {food.calories} cal</span>
+                      <button onClick={() => removeFoodFromMeal(i)} className="text-red-500 hover:text-red-700 text-xs">Remove</button>
+                    </div>
+                  )) : <p className="text-sm text-slate-400 text-center">No items added yet. Use AI to analyze your food above.</p>}
+                </div>
+                {addedFoods.length > 0 && (
+                  <div className="mt-2 flex gap-3 text-sm text-slate-600">
+                    <span>Total: <strong>{addedFoods.reduce((s, f) => s + f.calories, 0)} cal</strong></span>
+                    <span>P: {addedFoods.reduce((s, f) => s + f.protein, 0)}g</span>
+                    <span>C: {addedFoods.reduce((s, f) => s + f.carbs, 0)}g</span>
+                    <span>F: {addedFoods.reduce((s, f) => s + f.fat, 0)}g</span>
                   </div>
-                </div>
-              </div>
-              
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-                <div>
-                  <label className="label mb-1">Add Photo (Optional)</label>
-                  <div className="border-2 border-dashed border-slate-300 rounded-lg p-4 text-center hover:bg-slate-50 cursor-pointer">
-                    <Camera size={24} className="mx-auto text-slate-400 mb-2" />
-                    <p className="text-sm text-slate-500">
-                      Click to upload a photo or drag and drop
-                    </p>
-                  </div>
-                </div>
-                
-                <div>
-                  <label className="label">Notes (Optional)</label>
-                  <textarea 
-                    className="input"
-                    rows={4}
-                    placeholder="Add any notes about this meal..."
-                  ></textarea>
-                </div>
+                )}
               </div>
             </div>
-            
-            <div className="p-4 border-t border-slate-200 flex space-x-3">
-              <button 
-                className="btn btn-secondary flex-1"
-                onClick={() => setAddMealMode(false)}
-              >
-                Cancel
-              </button>
-              <button 
-                className="btn btn-primary flex-1"
-                onClick={() => {
-                  // This would save the meal in a real app
-                  setAddMealMode(false);
-                }}
-              >
-                Save Meal
+
+            <div className="p-4 border-t border-slate-200 flex gap-3">
+              <button onClick={() => { setAddMealMode(false); setAddedFoods([]); setAnalyzedFoods([]); }} className="flex-1 px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-medium">Cancel</button>
+              <button onClick={handleSaveMeal} disabled={addedFoods.length === 0 || saving}
+                className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white rounded-lg font-medium flex items-center justify-center gap-2">
+                {saving ? <Loader className="animate-spin" size={16} /> : null}
+                {saving ? 'Saving...' : 'Save Meal'}
               </button>
             </div>
           </div>

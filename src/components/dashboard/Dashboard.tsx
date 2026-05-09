@@ -1,497 +1,500 @@
-import React, { useState, useEffect } from 'react';
-import { 
-  Activity, 
-  Heart, 
-  Moon,
-  BrainCircuit, 
-  TrendingUp,
-  ArrowRight,
-  CheckCircle,
-  Droplets,
-  Thermometer,
-  Battery,
-  Bluetooth,
-  BluetoothOff,
-  Play,
-  Pause
-} from 'lucide-react';
-import { useSmartBand } from '../../hooks/useSmartBand';
-import MetricCard from '../common/MetricCard';
-import Chart from '../common/Chart';
-import BluetoothConnect from '../common/BluetoothConnect';
-import ActivityZone from '../common/ActivityZone';
-import AchievementTracker from '../common/AchievementTracker';
-import HealthTrends from '../common/HealthTrends';
-import DataExport from '../common/DataExport';
-import ConnectionQuality from '../common/ConnectionQuality';
+import React, { useState, useEffect } from "react";
+import { Link, useNavigate } from "react-router-dom";
+import { Activity, Moon, Heart, User, Bell, Droplet, Flame, ArrowRight, Zap, Target, Bluetooth, Monitor, Loader, Wifi, WifiOff, Sparkles } from "lucide-react";
+import { useSmartBand } from "../../hooks/useSmartBand";
+import Chart from "../common/Chart";
+import { useAuth } from "../../contexts/AuthContext";
+import {
+  fetchActivityRecords,
+  fetchSleepRecords,
+  fetchStressRecords,
+  fetchNotifications,
+  deleteNotification,
+  clearAllNotifications as clearAllNotifs,
+  seedUserData,
+} from "../../lib/supabaseDataService";
+import { generateHealthInsights, HealthContext } from "../../lib/aiService";
+import { format, subDays } from "date-fns";
+
+interface DashboardNotification {
+  id: string;
+  type: string;
+  title: string;
+  message: string;
+  created_at: string;
+  read: boolean;
+  action_url?: string;
+}
 
 const Dashboard: React.FC = () => {
-  const { 
-    data: smartBandData, 
-    isSimulating, 
-    dataSource,
-    startSimulation, 
-    stopSimulation,
-    toggleConnection,
-    getHistoricalData,
-    getProgress
-  } = useSmartBand();
-  
-  const [selectedTimeframe, setSelectedTimeframe] = useState<'day' | 'week' | 'month'>('week');
-  const [historicalData, setHistoricalData] = useState(getHistoricalData(7));
-  
-  // Don't auto-start - wait for device connection
+  const { data, connectBluetooth, startDemoMode, isConnecting, connectionError } = useSmartBand();
+  const { user } = useAuth();
+  const navigate = useNavigate();
+  const [activeTab, setActiveTab] = useState("overview");
 
-  // Update historical data when timeframe changes
+  // Real data state
+  const [notifications, setNotifications] = useState<DashboardNotification[]>([]);
+  const [activityData, setActivityData] = useState<any[]>([]);
+  const [sleepData, setSleepData] = useState<any[]>([]);
+  const [dataLoading, setDataLoading] = useState(true);
+  const [seeded, setSeeded] = useState(false);
+  const [aiInsights, setAiInsights] = useState<string | null>(null);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [stressData, setStressData] = useState<any[]>([]);
+
+  // Load real data from Supabase
   useEffect(() => {
-    const days = selectedTimeframe === 'day' ? 1 : selectedTimeframe === 'week' ? 7 : 30;
-    setHistoricalData(getHistoricalData(days));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedTimeframe]);
+    if (!user?.id) return;
 
-  // Prepare chart data from historical data
-  const prepareChartData = (field: 'heartRate' | 'steps' | 'calories' | 'sleep') => {
+    const loadData = async () => {
+      setDataLoading(true);
+
+      // Seed demo data on first load if user has none
+      if (!seeded) {
+        await seedUserData(user.id);
+        setSeeded(true);
+      }
+
+      const [actRes, sleepRes, notifRes, stressRes] = await Promise.all([
+        fetchActivityRecords(user.id, 14),
+        fetchSleepRecords(user.id, 14),
+        fetchNotifications(user.id),
+        fetchStressRecords(user.id, 14),
+      ]);
+
+      setActivityData(actRes.data);
+      setSleepData(sleepRes.data);
+      setStressData(stressRes.data);
+      setNotifications(notifRes.data as DashboardNotification[]);
+      setDataLoading(false);
+    };
+
+    loadData();
+  }, [user?.id, seeded]);
+
+  const unreadNotifications = notifications.filter(n => !n.read).length;
+
+  // Build chart data from real records
+  const buildChartData = (records: any[], valueKey: string, label: string, color: string) => {
+    const last7 = records.slice(-7);
     return {
-      labels: historicalData.map(d => {
-        const date = new Date(d.date);
-        return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-      }),
+      labels: last7.map((r: any) => format(new Date(r.recorded_at), 'MMM d')),
       datasets: [{
-        label: field.charAt(0).toUpperCase() + field.slice(1),
-        data: historicalData.map(d => d[field]),
-        borderColor: field === 'heartRate' ? 'rgb(239, 68, 68)' : 
-                     field === 'steps' ? 'rgb(34, 197, 94)' :
-                     field === 'calories' ? 'rgb(249, 115, 22)' :
-                     'rgb(59, 130, 246)',
-        backgroundColor: field === 'heartRate' ? 'rgba(239, 68, 68, 0.1)' : 
-                        field === 'steps' ? 'rgba(34, 197, 94, 0.1)' :
-                        field === 'calories' ? 'rgba(249, 115, 22, 0.1)' :
-                        'rgba(59, 130, 246, 0.1)',
-        tension: 0.4,
+        label,
+        data: last7.map((r: any) => r[valueKey] || 0),
+        borderColor: color,
+        backgroundColor: color + '20',
+        borderWidth: 2,
         fill: true,
-      }]
+        tension: 0.4,
+      }],
     };
   };
 
-  const progress = getProgress();
+  const stepsChartData = buildChartData(activityData, 'steps', 'Steps', '#3b82f6');
+  const sleepChartData = buildChartData(sleepData, 'duration', 'Sleep (min)', '#8b5cf6');
 
-  // Generate AI insights based on smart band data
-  const generateInsights = () => {
-    const insights = [];
-    
-    if (smartBandData.steps >= 10000) {
-      insights.push("🎯 Great job! You've reached your daily step goal!");
-    } else {
-      const remaining = 10000 - smartBandData.steps;
-      insights.push(`🚶 ${remaining.toLocaleString()} more steps to reach your daily goal!`);
-    }
-    
-    if (smartBandData.heartRate > 100) {
-      insights.push("💓 Your heart rate is elevated. Consider taking a break.");
-    } else if (smartBandData.heartRate < 70) {
-      insights.push("💚 Excellent resting heart rate! Your fitness level is great.");
-    }
-    
-    if (smartBandData.bloodOxygen < 95) {
-      insights.push("⚠️ Blood oxygen is low. Ensure you're breathing well.");
-    } else {
-      insights.push("✨ Blood oxygen levels are optimal!");
-    }
-    
-    if (smartBandData.stressLevel > 70) {
-      insights.push("😰 High stress detected. Try some breathing exercises.");
-    } else if (smartBandData.stressLevel < 30) {
-      insights.push("😌 Your stress levels are well managed today!");
-    }
-    
-    if (smartBandData.batteryLevel < 20) {
-      insights.push("🔋 Smart band battery is low. Remember to charge it!");
-    }
-    
-    return insights;
+  // Get today's stats from the latest record
+  const todayActivity = activityData.length > 0 ? activityData[activityData.length - 1] : null;
+  const todaySleep = sleepData.length > 0 ? sleepData[sleepData.length - 1] : null;
+
+  const handleRemoveNotification = async (id: string) => {
+    await deleteNotification(id);
+    setNotifications(prev => prev.filter(n => n.id !== id));
   };
 
-  const insights = generateInsights();
-  
-  // Show setup screen if no device connected
-  const showSetupScreen = !smartBandData.isConnected && dataSource !== 'bluetooth';
+  const handleClearAllNotifications = async () => {
+    if (!user?.id) return;
+    await clearAllNotifs(user.id);
+    setNotifications([]);
+  };
 
-  return (
-    <div className="max-w-7xl mx-auto">
-      {/* Setup Screen - Show when no device connected */}
-      {showSetupScreen ? (
-        <div className="flex items-center justify-center min-h-[80vh]">
-          <div className="max-w-2xl w-full">
-            <div className="text-center mb-8">
-              <div className="inline-flex items-center justify-center w-20 h-20 bg-blue-100 rounded-full mb-4">
-                <Bluetooth className="text-blue-600" size={40} />
-              </div>
-              <h1 className="text-3xl font-bold text-slate-800 mb-2">
-                Connect Your Smart Watch
-              </h1>
-              <p className="text-slate-600 text-lg">
-                Pair your device to start monitoring your health data in real-time
-              </p>
-            </div>
-            
-            <BluetoothConnect />
-            
-            <div className="mt-8 grid grid-cols-3 gap-4">
-              <div className="text-center p-4 bg-slate-50 rounded-lg">
-                <Heart className="text-red-500 mx-auto mb-2" size={32} />
-                <p className="text-sm font-medium text-slate-700">Heart Rate</p>
-                <p className="text-xs text-slate-500">Real-time monitoring</p>
-              </div>
-              <div className="text-center p-4 bg-slate-50 rounded-lg">
-                <Activity className="text-green-500 mx-auto mb-2" size={32} />
-                <p className="text-sm font-medium text-slate-700">Activity</p>
-                <p className="text-xs text-slate-500">Steps & calories</p>
-              </div>
-              <div className="text-center p-4 bg-slate-50 rounded-lg">
-                <Moon className="text-blue-500 mx-auto mb-2" size={32} />
-                <p className="text-sm font-medium text-slate-700">Sleep</p>
-                <p className="text-xs text-slate-500">Quality tracking</p>
-              </div>
-            </div>
+  if (!data?.isConnected) {
+    return (
+      <div className="max-w-4xl mx-auto py-12 px-4 text-center">
+        <div className="bg-white p-8 rounded-2xl shadow-sm border border-slate-200">
+          <div className="w-20 h-20 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-6">
+            <Zap className="text-blue-600" size={32} />
           </div>
-        </div>
-      ) : (
-        <>
-          {/* Welcome header with device status */}
-          <header className="mb-6">
-            <div className="flex justify-between items-start">
-              <div>
-                <h1 className="text-2xl font-bold text-slate-800 mb-2">
-                  Smart Band Monitor
-                </h1>
-                <p className="text-slate-600">
-                  Real-time data from your wearable device
-            </p>
-          </div>
+          <h2 className="text-2xl font-bold text-slate-800 mb-4">Connect Your Smart Band</h2>
+          <p className="text-slate-600 mb-8 max-w-lg mx-auto">Sync your device to view your personalized dashboard with activity, sleep, diet, and advanced health analytics.</p>
           
-          {/* Device Status */}
-          <div className="flex items-center gap-4">
-            <div className={`flex items-center gap-2 px-4 py-2 rounded-lg ${
-              dataSource === 'bluetooth' ? 'bg-blue-50' : 
-              smartBandData.isConnected ? 'bg-green-50' : 'bg-yellow-50'
-            }`}>
-              {dataSource === 'bluetooth' ? (
+          {connectionError && (
+            <div className="mb-6 p-3 bg-red-50 border border-red-200 text-red-700 rounded-lg text-sm max-w-md mx-auto">
+              {connectionError}
+            </div>
+          )}
+
+          <div className="flex flex-col sm:flex-row gap-4 justify-center max-w-md mx-auto">
+            {/* Bluetooth Pairing Button */}
+            <button
+              onClick={connectBluetooth}
+              disabled={isConnecting}
+              className="btn flex-1 px-6 py-3 text-base font-medium bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white rounded-xl transition-all flex items-center justify-center gap-2 shadow-md hover:shadow-lg"
+            >
+              {isConnecting ? (
                 <>
-                  <Bluetooth className="text-blue-600" size={20} />
-                  <span className="text-sm font-medium text-blue-700">Real Device</span>
-                </>
-              ) : smartBandData.isConnected ? (
-                <>
-                  <Bluetooth className="text-green-600" size={20} />
-                  <span className="text-sm font-medium text-green-700">Simulated</span>
+                  <Loader className="animate-spin" size={20} />
+                  Connecting...
                 </>
               ) : (
                 <>
-                  <BluetoothOff className="text-yellow-600" size={20} />
-                  <span className="text-sm font-medium text-yellow-700">Paused</span>
+                  <Bluetooth size={20} />
+                  Pair via Bluetooth
                 </>
+              )}
+            </button>
+
+            {/* Demo Mode Button */}
+            <button
+              onClick={startDemoMode}
+              disabled={isConnecting}
+              className="btn flex-1 px-6 py-3 text-base font-medium bg-slate-700 hover:bg-slate-800 disabled:bg-slate-400 text-white rounded-xl transition-all flex items-center justify-center gap-2 shadow-md hover:shadow-lg"
+            >
+              <Monitor size={20} />
+              Use Demo Mode
+            </button>
+          </div>
+
+          <div className="mt-8 pt-6 border-t border-slate-100 max-w-md mx-auto">
+            <p className="text-xs text-slate-500">
+              <strong>Bluetooth:</strong> Opens your browser's device picker to pair with a real smart band/watch (requires Chrome/Edge).
+              <br />
+              <strong>Demo Mode:</strong> Uses realistic simulated sensor data to explore the dashboard.
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (dataLoading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="text-center">
+          <Loader className="animate-spin text-blue-600 mx-auto mb-4" size={32} />
+          <p className="text-slate-600">Loading your health data...</p>
+        </div>
+      </div>
+    );
+  }
+
+  const renderTabContent = () => {
+    switch(activeTab) {
+      case "activity":
+        return (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="font-bold text-lg text-slate-800">Activity Overview</h3>
+                <Activity className="text-blue-500" />
+              </div>
+              <Chart data={stepsChartData} height={250} />
+            </div>
+            <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-center">
+              <h3 className="font-bold text-lg text-slate-800 mb-2">Today's Goal</h3>
+              <div className="text-5xl font-black text-blue-600 mb-4">
+                {(todayActivity?.steps || data.steps).toLocaleString()} <span className="text-lg text-slate-500 font-normal">/ 10,000 steps</span>
+              </div>
+              <div className="w-full bg-slate-100 rounded-full h-4 mb-4 overflow-hidden">
+                <div className="bg-blue-500 h-4 rounded-full transition-all duration-500" style={{ width: `${Math.min(((todayActivity?.steps || data.steps) / 10000) * 100, 100)}%` }}></div>
+              </div>
+              <p className="text-slate-600 mb-4">{(todayActivity?.steps || data.steps) >= 10000 ? "Goal reached! Amazing job!" : "You are on track! Keep moving to hit your daily goal."}</p>
+              <Link to="/activity" className="text-blue-600 font-medium hover:underline flex items-center text-sm">View full activity log <ArrowRight size={16} className="ml-1" /></Link>
+            </div>
+          </div>
+        );
+      case "sleep":
+        return (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="font-bold text-lg text-slate-800">Sleep Analysis</h3>
+                <Moon className="text-indigo-500" />
+              </div>
+              <Chart data={sleepChartData} height={250} />
+            </div>
+            <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+              <h3 className="font-bold text-lg text-slate-800 mb-4">Last Night</h3>
+              <div className="flex items-baseline space-x-2 mb-6">
+                <span className="text-5xl font-black text-indigo-600">
+                  {todaySleep ? Math.floor(todaySleep.duration / 60) : 7}<span className="text-2xl text-indigo-400">h</span>{' '}
+                  {todaySleep ? todaySleep.duration % 60 : 12}<span className="text-2xl text-indigo-400">m</span>
+                </span>
+              </div>
+              <div className="grid grid-cols-3 gap-3 mb-6">
+                <div className="bg-indigo-50 p-3 rounded-lg text-center">
+                  <div className="text-indigo-800 font-bold">{todaySleep ? `${Math.floor(todaySleep.deep_sleep_minutes / 60)}h ${todaySleep.deep_sleep_minutes % 60}m` : '1h 20m'}</div>
+                  <div className="text-xs text-indigo-600 uppercase tracking-wider">Deep</div>
+                </div>
+                <div className="bg-blue-50 p-3 rounded-lg text-center">
+                  <div className="text-blue-800 font-bold">{todaySleep ? `${Math.floor(todaySleep.light_sleep_minutes / 60)}h ${todaySleep.light_sleep_minutes % 60}m` : '4h 30m'}</div>
+                  <div className="text-xs text-blue-600 uppercase tracking-wider">Light</div>
+                </div>
+                <div className="bg-purple-50 p-3 rounded-lg text-center">
+                  <div className="text-purple-800 font-bold">{todaySleep ? `${Math.floor(todaySleep.rem_sleep_minutes / 60)}h ${todaySleep.rem_sleep_minutes % 60}m` : '1h 22m'}</div>
+                  <div className="text-xs text-purple-600 uppercase tracking-wider">REM</div>
+                </div>
+              </div>
+              <Link to="/sleep" className="text-indigo-600 font-medium hover:underline flex items-center text-sm">Detailed sleep metrics <ArrowRight size={16} className="ml-1" /></Link>
+            </div>
+          </div>
+        );
+      case "profile":
+        return (
+          <div className="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm">
+            <div className="flex flex-col md:flex-row items-center gap-8">
+              <div className="h-32 w-32 bg-slate-200 rounded-full overflow-hidden flex-shrink-0 border-4 border-white shadow-lg">
+                {user?.photoURL ? <img src={user.photoURL} alt="Profile" className="h-full w-full object-cover"/> : <div className="h-full w-full flex items-center justify-center text-4xl text-slate-400 font-bold">{user?.displayName?.charAt(0) || "U"}</div>}
+              </div>
+              <div className="flex-1 text-center md:text-left">
+                <h2 className="text-3xl font-bold text-slate-800 mb-2">{user?.displayName || "User Profile"}</h2>
+                <p className="text-slate-500 mb-4">{user?.email}</p>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-6">
+                  <div className="p-4 bg-slate-50 rounded-xl border border-slate-100">
+                    <div className="text-sm text-slate-500 mb-1">Age</div>
+                    <div className="font-bold text-lg text-slate-800">28</div>
+                  </div>
+                  <div className="p-4 bg-slate-50 rounded-xl border border-slate-100">
+                    <div className="text-sm text-slate-500 mb-1">Weight</div>
+                    <div className="font-bold text-lg text-slate-800">68 kg</div>
+                  </div>
+                  <div className="p-4 bg-slate-50 rounded-xl border border-slate-100">
+                    <div className="text-sm text-slate-500 mb-1">Height</div>
+                    <div className="font-bold text-lg text-slate-800">175 cm</div>
+                  </div>
+                  <div className="p-4 bg-slate-50 rounded-xl border border-slate-100">
+                    <div className="text-sm text-slate-500 mb-1">Goal</div>
+                    <div className="font-bold text-lg text-slate-800">Fitness</div>
+                  </div>
+                </div>
+              </div>
+              <div className="flex flex-col gap-3">
+                <Link to="/profile" className="btn btn-primary">Edit Profile</Link>
+                <Link to="/settings" className="btn btn-secondary">Settings</Link>
+              </div>
+            </div>
+          </div>
+        );
+      case "notifications":
+        return (
+          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm max-w-3xl mx-auto">
+            <div className="flex items-center justify-between mb-6">
+              <h3 className="font-bold text-xl text-slate-800 flex items-center">Notifications {unreadNotifications > 0 && <span className="ml-2 bg-red-500 text-white text-xs px-2 py-1 rounded-full">{unreadNotifications}</span>}</h3>
+              {notifications.length > 0 && (
+                <button 
+                  onClick={handleClearAllNotifications}
+                  className="text-sm text-red-600 hover:text-red-800 font-medium"
+                >
+                  Clear all notifications
+                </button>
+              )}
+            </div>
+            {notifications.length === 0 ? (
+              <div className="text-center py-8 text-slate-500">
+                <Bell className="mx-auto text-slate-300 mb-3" size={32} />
+                <p>No notifications left</p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {notifications.map(n => (
+                  <div 
+                    key={n.id} 
+                    onClick={() => handleRemoveNotification(n.id)}
+                    className={`p-4 rounded-xl border ${n.read ? "border-slate-100 bg-slate-50" : "border-blue-100 bg-blue-50"} cursor-pointer flex items-start transition-all hover:-translate-y-1 hover:shadow-sm`}
+                    title="Click to dismiss"
+                  >
+                    <div className={`p-2 rounded-full mr-4 flex-shrink-0 ${n.read ? "bg-slate-200" : "bg-blue-100 text-blue-600"}`}>
+                      <Bell size={20} />
+                    </div>
+                    <div className="flex-1">
+                      <h4 className="font-bold text-slate-800 text-sm mb-1">{n.title}</h4>
+                      <p className="text-slate-600 text-sm">{n.message}</p>
+                      <div className="text-xs text-slate-400 mt-2">{new Date(n.created_at).toLocaleString()}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="mt-6 text-center">
+              <Link to="/notifications" className="btn btn-secondary w-full">View all past notifications</Link>
+            </div>
+          </div>
+        );
+      case "analytics": {
+        const loadAiInsights = async () => {
+          if (aiInsights || aiLoading) return;
+          setAiLoading(true);
+          try {
+            const ctx: HealthContext = {
+              heartRate: data.heartRate,
+              bloodOxygen: data.bloodOxygen,
+              steps: data.steps,
+              calories: data.caloriesBurned,
+              stressLevel: data.stressLevel ? Math.round(data.stressLevel / 10) : undefined,
+            };
+            if (activityData.length > 0) {
+              ctx.recentActivity = activityData.slice(-7).map((a: any) => ({
+                date: new Date(a.recorded_at).toLocaleDateString(),
+                steps: a.steps,
+                calories_burned: a.calories_burned,
+              }));
+            }
+            if (sleepData.length > 0) {
+              const lastSleep = sleepData[sleepData.length - 1];
+              ctx.sleepHours = Math.round((lastSleep?.duration || 0) / 60 * 10) / 10;
+              ctx.sleepQuality = lastSleep?.quality;
+              ctx.recentSleep = sleepData.slice(-7).map((s: any) => ({
+                date: new Date(s.recorded_at).toLocaleDateString(),
+                duration: s.duration,
+                quality: s.quality,
+              }));
+            }
+            if (stressData.length > 0) {
+              ctx.recentStress = stressData.slice(-7).map((s: any) => ({
+                date: new Date(s.recorded_at).toLocaleDateString(),
+                stress_level: s.stress_level,
+              }));
+            }
+            const insights = await generateHealthInsights(ctx);
+            setAiInsights(insights);
+          } catch (err) {
+            console.error('AI insights error:', err);
+            setAiInsights('Unable to generate AI insights at this time. Please try again later.');
+          } finally {
+            setAiLoading(false);
+          }
+        };
+
+        // Auto-load insights when tab is opened
+        if (!aiInsights && !aiLoading) {
+          loadAiInsights();
+        }
+
+        const renderInsightContent = (text: string) => {
+          return text.split('\n').map((line, i) => {
+            let processed = line.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+            if (processed.startsWith('- ') || processed.startsWith('• ')) {
+              processed = '• ' + processed.slice(2);
+              return <p key={i} className="ml-3 mb-1.5 text-sm" dangerouslySetInnerHTML={{ __html: processed }} />;
+            }
+            if (processed.trim() === '') return <br key={i} />;
+            return <p key={i} className="mb-1.5 text-sm" dangerouslySetInnerHTML={{ __html: processed }} />;
+          });
+        };
+
+        return (
+          <div className="space-y-6">
+            <div className="bg-gradient-to-r from-blue-600 to-indigo-700 rounded-2xl p-8 text-white shadow-lg">
+              <h3 className="text-2xl font-bold mb-2 flex items-center"><Sparkles className="mr-2" /> AI Health Insights <span className="ml-2 text-xs font-normal bg-white/20 px-2 py-0.5 rounded-full">GPT-5.4</span></h3>
+              <p className="text-blue-100 mb-6 max-w-2xl">Personalized analysis powered by AI, using your real health data from the last 14 days.</p>
+              
+              {aiLoading ? (
+                <div className="bg-white/10 backdrop-blur-sm p-6 rounded-xl border border-white/20 flex items-center justify-center gap-3">
+                  <Loader className="animate-spin" size={20} />
+                  <span>Analyzing your health data with AI...</span>
+                </div>
+              ) : aiInsights ? (
+                <div className="bg-white/10 backdrop-blur-sm p-6 rounded-xl border border-white/20 text-white/95">
+                  {renderInsightContent(aiInsights)}
+                </div>
+              ) : null}
+              
+              {aiInsights && (
+                <button
+                  onClick={() => { setAiInsights(null); }}
+                  className="mt-4 text-sm text-blue-200 hover:text-white flex items-center gap-1"
+                >
+                  <Sparkles size={14} /> Regenerate insights
+                </button>
               )}
             </div>
             
-            <button
-              onClick={() => isSimulating ? stopSimulation() : startSimulation()}
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg ${
-                isSimulating ? 'bg-yellow-50 text-yellow-700' : 'bg-blue-50 text-blue-700'
-              }`}
-            >
-              {isSimulating ? <Pause size={20} /> : <Play size={20} />}
-              <span className="text-sm font-medium">
-                {isSimulating ? 'Pause' : 'Start'} Sync
-              </span>
-            </button>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+               {["Heart Health", "Stress Analysis", "Workout Intensity"].map(title => (
+                 <div key={title} className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm cursor-pointer hover:border-blue-300 transition-colors">
+                   <h4 className="font-bold text-slate-800 mb-2">{title}</h4>
+                   <p className="text-sm text-slate-500 mb-4">View comprehensive {title.toLowerCase()} metrics over the last 14 days.</p>
+                   <span className="text-blue-600 text-sm font-medium flex items-center">Open report <ArrowRight size={14} className="ml-1" /></span>
+                 </div>
+               ))}
+            </div>
           </div>
-        </div>
-      </header>
+        );
+      }
+      default:
+        return (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+            <div onClick={() => setActiveTab("activity")} className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 hover:border-blue-400 cursor-pointer transition-all hover:-translate-y-1">
+              <div className="flex justify-between items-start mb-4">
+                <div className="p-3 bg-blue-50 text-blue-600 rounded-xl"><Activity size={24} /></div>
+                <span className="text-xs font-semibold px-2 py-1 bg-green-100 text-green-700 rounded-full">+12%</span>
+              </div>
+              <h3 className="text-slate-500 text-sm font-medium mb-1">Daily Steps</h3>
+              <div className="text-2xl font-bold text-slate-800">{(todayActivity?.steps || data.steps).toLocaleString()}</div>
+            </div>
+            <div onClick={() => setActiveTab("sleep")} className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 hover:border-indigo-400 cursor-pointer transition-all hover:-translate-y-1">
+              <div className="flex justify-between items-start mb-4">
+                <div className="p-3 bg-indigo-50 text-indigo-600 rounded-xl"><Moon size={24} /></div>
+                <span className="text-xs font-semibold px-2 py-1 bg-green-100 text-green-700 rounded-full">Good</span>
+              </div>
+              <h3 className="text-slate-500 text-sm font-medium mb-1">Sleep Score</h3>
+              <div className="text-2xl font-bold text-slate-800">{todaySleep?.quality || 85}<span className="text-sm text-slate-400 font-normal">/10</span></div>
+            </div>
+            <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 hover:border-red-400 cursor-pointer transition-all hover:-translate-y-1">
+              <div className="flex justify-between items-start mb-4">
+                <div className="p-3 bg-red-50 text-red-600 rounded-xl"><Heart size={24} /></div>
+                <span className="text-xs font-semibold px-2 py-1 bg-slate-100 text-slate-700 rounded-full">Normal</span>
+              </div>
+              <h3 className="text-slate-500 text-sm font-medium mb-1">Avg Heart Rate</h3>
+              <div className="text-2xl font-bold text-slate-800">{data.heartRate} <span className="text-sm text-slate-400 font-normal">bpm</span></div>
+            </div>
+            <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 hover:border-amber-400 cursor-pointer transition-all hover:-translate-y-1">
+              <div className="flex justify-between items-start mb-4">
+                <div className="p-3 bg-amber-50 text-amber-600 rounded-xl"><Flame size={24} /></div>
+                <span className="text-xs font-semibold px-2 py-1 bg-green-100 text-green-700 rounded-full">+4%</span>
+              </div>
+              <h3 className="text-slate-500 text-sm font-medium mb-1">Calories Burned</h3>
+              <div className="text-2xl font-bold text-slate-800">{(todayActivity?.calories_burned || data.caloriesBurned).toLocaleString()} <span className="text-sm text-slate-400 font-normal">kcal</span></div>
+            </div>
+          </div>
+        );
+    }
+  };
 
-      {/* Time range selector */}
-      <div className="mb-6 flex items-center justify-between">
-        <div className="inline-flex items-center bg-slate-100 rounded-lg p-1" role="group">
-          {['day', 'week', 'month'].map((timeframe) => (
+  return (
+    <div className="max-w-7xl mx-auto pb-12">
+      <div className="flex flex-col md:flex-row md:items-center justify-between mb-8 gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-800 mb-1">Health Dashboard</h1>
+          <p className="text-slate-500">Welcome back, {user?.displayName || "User"}! Here's your health summary.</p>
+        </div>
+        <div className="flex bg-white rounded-xl shadow-sm border border-slate-200 p-1 self-start">
+          {[
+            { id: "overview", label: "Overview" },
+            { id: "activity", label: "Activity" },
+            { id: "sleep", label: "Sleep" },
+            { id: "analytics", label: "Analytics" },
+            { id: "profile", label: "Profile" },
+            { id: "notifications", label: "Notifications" }
+          ].map(tab => (
             <button
-              key={timeframe}
-              className={`px-4 py-1.5 text-sm font-medium rounded-md ${
-                selectedTimeframe === timeframe
-                  ? 'bg-white text-blue-600 shadow-sm'
-                  : 'text-slate-600 hover:text-slate-700'
-              }`}
-              onClick={() => setSelectedTimeframe(timeframe as 'day' | 'week' | 'month')}
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={`px-4 py-2 text-sm font-medium rounded-lg transition-colors ${activeTab === tab.id ? "bg-blue-50 text-blue-700" : "text-slate-600 hover:text-slate-800 hover:bg-slate-50"}`}
             >
-              {timeframe.charAt(0).toUpperCase() + timeframe.slice(1)}
+              {tab.label} {tab.id === "notifications" && unreadNotifications > 0 && `(${unreadNotifications})`}
             </button>
           ))}
-        </div>
-        
-        <div className="text-sm text-slate-500">
-          Last updated: {new Date().toLocaleString()}
-        </div>
-      </div>
-
-      {/* Real-time Vital Signs */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-        <MetricCard
-          title="Heart Rate"
-          value={`${smartBandData.heartRate}`}
-          description="BPM - Live"
-          icon={<Heart size={24} />}
-          color="red"
-          link="/heart"
-        />
-        
-        <MetricCard
-          title="Blood Oxygen"
-          value={`${smartBandData.bloodOxygen}%`}
-          description="SpO2 Level"
-          icon={<Droplets size={24} />}
-          color="blue"
-          link="/heart"
-        />
-        
-        <MetricCard
-          title="Body Temp"
-          value={`${smartBandData.temperature}°C`}
-          description="Current temperature"
-          icon={<Thermometer size={24} />}
-          color="orange"
-        />
-        
-        <MetricCard
-          title="Battery"
-          value={`${smartBandData.batteryLevel}%`}
-          description="Device battery"
-          icon={<Battery size={24} />}
-          color="green"
-        />
-      </div>
-
-      {/* Activity Metrics */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
-        <MetricCard
-          title="Daily Steps"
-          value={smartBandData.steps.toLocaleString()}
-          description={`${smartBandData.distance} km • Goal: 10,000`}
-          icon={<Activity size={24} />}
-          trend={{ value: progress.steps, isPositive: true }}
-          color="green"
-          link="/activity"
-        />
-        
-        <MetricCard
-          title="Calories Burned"
-          value={smartBandData.caloriesBurned}
-          description={`Active: ${smartBandData.activeMinutes} min`}
-          icon={<TrendingUp size={24} />}
-          trend={{ value: progress.calories, isPositive: true }}
-          color="orange"
-          link="/activity"
-        />
-        
-        <MetricCard
-          title="Stress Level"
-          value={`${smartBandData.stressLevel}%`}
-          description={smartBandData.stressLevel < 30 ? 'Low stress' : smartBandData.stressLevel < 70 ? 'Moderate' : 'High stress'}
-          icon={<BrainCircuit size={24} />}
-          color="purple"
-          link="/stress"
-        />
-      </div>
-
-      {/* Enhanced Widgets Row */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
-        <ActivityZone 
-          heartRate={smartBandData.heartRate}
-          steps={smartBandData.steps}
-          stressLevel={smartBandData.stressLevel}
-        />
-        <AchievementTracker
-          steps={smartBandData.steps}
-          heartRate={smartBandData.heartRate}
-          caloriesBurned={smartBandData.caloriesBurned}
-          activeMinutes={smartBandData.activeMinutes}
-        />
-      </div>
-
-      {/* Health Trends */}
-      <div className="mb-6">
-        <HealthTrends currentData={{
-          heartRate: smartBandData.heartRate,
-          steps: smartBandData.steps,
-          caloriesBurned: smartBandData.caloriesBurned,
-          bloodOxygen: smartBandData.bloodOxygen,
-          stressLevel: smartBandData.stressLevel,
-        }} />
-      </div>
-
-      {/* Sleep Analysis Card */}
-      <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 mb-6">
-        <h2 className="text-lg font-semibold text-slate-800 mb-4">Last Night's Sleep Analysis</h2>
-        
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-          <div className="text-center">
-            <Moon className="w-8 h-8 text-blue-500 mx-auto mb-2" />
-            <p className="text-sm text-slate-500 mb-1">Deep Sleep</p>
-            <p className="text-lg font-bold text-slate-800">{smartBandData.sleepData.deepSleep}m</p>
-          </div>
-          
-          <div className="text-center">
-            <Moon className="w-8 h-8 text-indigo-500 mx-auto mb-2" />
-            <p className="text-sm text-slate-500 mb-1">Light Sleep</p>
-            <p className="text-lg font-bold text-slate-800">{smartBandData.sleepData.lightSleep}m</p>
-          </div>
-          
-          <div className="text-center">
-            <Moon className="w-8 h-8 text-purple-500 mx-auto mb-2" />
-            <p className="text-sm text-slate-500 mb-1">REM Sleep</p>
-            <p className="text-lg font-bold text-slate-800">{smartBandData.sleepData.remSleep}m</p>
-          </div>
-          
-          <div className="text-center">
-            <Moon className="w-8 h-8 text-orange-500 mx-auto mb-2" />
-            <p className="text-sm text-slate-500 mb-1">Awake</p>
-            <p className="text-lg font-bold text-slate-800">{smartBandData.sleepData.awake}m</p>
-          </div>
-          
-          <div className="text-center">
-            <div className={`w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-2 ${
-              smartBandData.sleepData.sleepQuality === 'Excellent' ? 'bg-green-100' :
-              smartBandData.sleepData.sleepQuality === 'Good' ? 'bg-blue-100' :
-              smartBandData.sleepData.sleepQuality === 'Fair' ? 'bg-yellow-100' : 'bg-red-100'
-            }`}>
-              <CheckCircle className={`w-8 h-8 ${
-                smartBandData.sleepData.sleepQuality === 'Excellent' ? 'text-green-600' :
-                smartBandData.sleepData.sleepQuality === 'Good' ? 'text-blue-600' :
-                smartBandData.sleepData.sleepQuality === 'Fair' ? 'text-yellow-600' : 'text-red-600'
-              }`} />
-            </div>
-            <p className="text-sm text-slate-500 mb-1">Quality</p>
-            <p className="text-lg font-bold text-slate-800">{smartBandData.sleepData.sleepQuality}</p>
-          </div>
-        </div>
-      </div>
-
-      {/* Charts section - Historical Data */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
-          <div className="flex justify-between items-center mb-4">
-            <h2 className="text-lg font-semibold text-slate-800">Heart Rate Trends</h2>
-            <a href="/heart" className="text-sm text-blue-600 hover:text-blue-700 flex items-center">
-              Details <ArrowRight size={16} className="ml-1" />
-            </a>
-          </div>
-          <Chart data={prepareChartData('heartRate')} height={220} />
-        </div>
-        
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
-          <div className="flex justify-between items-center mb-4">
-            <h2 className="text-lg font-semibold text-slate-800">Daily Steps</h2>
-            <a href="/activity" className="text-sm text-blue-600 hover:text-blue-700 flex items-center">
-              Details <ArrowRight size={16} className="ml-1" />
-            </a>
-          </div>
-          <Chart data={prepareChartData('steps')} type="bar" height={220} />
-        </div>
-        
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
-          <div className="flex justify-between items-center mb-4">
-            <h2 className="text-lg font-semibold text-slate-800">Calories Burned</h2>
-            <a href="/activity" className="text-sm text-blue-600 hover:text-blue-700 flex items-center">
-              Details <ArrowRight size={16} className="ml-1" />
-            </a>
-          </div>
-          <Chart data={prepareChartData('calories')} height={220} />
-        </div>
-        
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
-          <div className="flex justify-between items-center mb-4">
-            <h2 className="text-lg font-semibold text-slate-800">Sleep Duration</h2>
-            <a href="/sleep" className="text-sm text-blue-600 hover:text-blue-700 flex items-center">
-              Details <ArrowRight size={16} className="ml-1" />
-            </a>
-          </div>
-          <Chart data={prepareChartData('sleep')} height={220} />
-        </div>
-      </div>
-
-      {/* Additional Features Row */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
-        <ConnectionQuality 
-          isConnected={smartBandData.isConnected}
-          dataSource={dataSource}
-          lastUpdate={smartBandData.timestamp}
-        />
-        <DataExport 
-          currentData={smartBandData}
-          historicalData={historicalData}
-        />
-      </div>
-
-      {/* AI Health Insights */}
-      <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 mb-6">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold text-slate-800">Smart Band Insights</h2>
-          <span className="px-2 py-1 bg-blue-100 text-blue-700 rounded-full text-xs font-medium">
-            Real-time Analysis
-          </span>
-        </div>
-        
-        <div className="space-y-3">
-          {insights.map((insight, index) => (
-            <div key={index} className="flex items-start space-x-3 p-3 hover:bg-slate-50 rounded-lg transition-colors">
-              <span className="text-xl flex-shrink-0">{insight.split(' ')[0]}</span>
-              <p className="text-slate-700">{insight.substring(insight.indexOf(' ') + 1)}</p>
-            </div>
-          ))}
-        </div>
-        
-        <div className="mt-4 pt-3 border-t border-slate-100 grid grid-cols-2 gap-3">
-          <button 
-            onClick={toggleConnection}
-            className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg transition-colors"
-          >
-            {smartBandData.isConnected ? 'Disconnect' : 'Connect'} Device
-          </button>
-          <button 
-            onClick={() => window.location.href = '/analytics'}
-            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors"
-          >
-            View Analytics
-          </button>
         </div>
       </div>
       
-      {/* Bluetooth Connection Section */}
-      <div className="mb-6">
-        <BluetoothConnect />
-      </div>
-
-      {/* Live Data Indicator */}
-      <div className="bg-gradient-to-r from-blue-50 to-purple-50 rounded-xl shadow-sm border border-blue-200 p-4 mb-6">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="relative">
-              <div className="w-3 h-3 bg-green-500 rounded-full animate-pulse"></div>
-              <div className="absolute top-0 left-0 w-3 h-3 bg-green-500 rounded-full animate-ping"></div>
-            </div>
-            <div>
-              <p className="text-sm font-medium text-slate-800">Live Monitoring Active</p>
-              <p className="text-xs text-slate-600">
-                Last updated: {smartBandData.timestamp.toLocaleTimeString()}
-              </p>
-            </div>
-          </div>
-          <div className="text-right">
-            <p className="text-xs text-slate-500">
-              {dataSource === 'bluetooth' ? '🔵 Real Device Data' : '🟡 Simulated Data'}
-            </p>
-            <p className="text-xs text-slate-500">Device ID: SB-{smartBandData.batteryLevel}{smartBandData.heartRate}</p>
-          </div>
+      {activeTab === "overview" && renderTabContent()}
+      
+      {activeTab !== "overview" && (
+        <div className="animate-in fade-in slide-in-from-bottom-4 duration-300">
+          {renderTabContent()}
         </div>
-      </div>
-        </>
       )}
     </div>
   );

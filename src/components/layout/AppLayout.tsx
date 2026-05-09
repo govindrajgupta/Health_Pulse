@@ -4,6 +4,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import Sidebar from './Sidebar';
 import Header from './Header';
 import LoadingScreen from '../common/LoadingScreen';
+import AIChat from '../common/AIChat';
 
 const AppLayout: React.FC = () => {
   const { user, loading } = useAuth();
@@ -25,6 +26,7 @@ const AppLayout: React.FC = () => {
           <Outlet />
         </main>
       </div>
+      <AIChat />
     </div>
   );
 };

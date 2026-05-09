@@ -121,15 +121,9 @@ const LoginPage: React.FC = () => {
         </div>
 
         <div className="mt-6 pt-5 border-t border-slate-200">
-          <button 
-            className="w-full btn bg-white text-slate-700 border border-slate-300 hover:bg-slate-50 flex items-center justify-center"
-            onClick={() => {
-              setEmail('demo@example.com');
-              setPassword('password');
-            }}
-          >
-            Demo Mode (Prefill)
-          </button>
+          <p className="text-xs text-slate-500 text-center">
+            Create a new account to get started. Demo data will be automatically generated on first login.
+          </p>
         </div>
       </div>
 

@@ -1,8 +1,22 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { BellIcon, Search, Moon, Sun } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
-import { generateMockNotifications } from '../../utils/mockData';
+import {
+  fetchNotifications,
+  deleteNotification,
+  clearAllNotifications as clearAllNotifs,
+} from '../../lib/supabaseDataService';
+
+interface HeaderNotification {
+  id: string;
+  type: string;
+  title: string;
+  message: string;
+  created_at: string;
+  read: boolean;
+  action_url?: string;
+}
 
 const Header: React.FC = () => {
   const { user, logout } = useAuth();
@@ -10,13 +24,26 @@ const Header: React.FC = () => {
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
-  
-  const notifications = generateMockNotifications();
+  const [notifications, setNotifications] = useState<HeaderNotification[]>([]);
+
+  // Load notifications from Supabase
+  useEffect(() => {
+    if (!user?.id) return;
+    fetchNotifications(user.id).then(({ data }) => {
+      setNotifications((data || []) as HeaderNotification[]);
+    });
+  }, [user?.id]);
+
   const unreadCount = notifications.filter(n => !n.read).length;
 
   const toggleDarkMode = () => {
-    setIsDarkMode(!isDarkMode);
-    // In a real app, this would toggle a dark mode class on the html element
+    const newDarkMode = !isDarkMode;
+    setIsDarkMode(newDarkMode);
+    if (newDarkMode) {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
   };
 
   const handleLogout = async () => {
@@ -28,11 +55,19 @@ const Header: React.FC = () => {
     }
   };
 
-  const handleNotificationClick = (path?: string) => {
+  const handleNotificationClick = async (id: string, path?: string) => {
+    await deleteNotification(id);
+    setNotifications(prev => prev.filter(n => n.id !== id));
     if (path) {
       navigate(path);
     }
     setShowNotifications(false);
+  };
+
+  const handleClearAll = async () => {
+    if (!user?.id) return;
+    await clearAllNotifs(user.id);
+    setNotifications([]);
   };
 
   return (
@@ -84,8 +119,16 @@ const Header: React.FC = () => {
             {/* Notification dropdown */}
             {showNotifications && (
               <div className="absolute right-0 mt-2 w-80 bg-white rounded-lg shadow-lg border border-slate-200 z-50 overflow-hidden">
-                <div className="p-3 border-b border-slate-200">
+                <div className="p-3 border-b border-slate-200 flex justify-between items-center">
                   <h3 className="font-semibold text-slate-800">Notifications</h3>
+                  {notifications.length > 0 && (
+                    <button 
+                      onClick={handleClearAll}
+                      className="text-xs text-red-600 hover:text-red-800"
+                    >
+                      Clear all
+                    </button>
+                  )}
                 </div>
                 <div className="max-h-96 overflow-y-auto">
                   {notifications.length > 0 ? (
@@ -93,13 +136,13 @@ const Header: React.FC = () => {
                       {notifications.map((notification) => (
                         <div 
                           key={notification.id}
-                          onClick={() => handleNotificationClick(notification.actionURL)}
+                            onClick={() => handleNotificationClick(notification.id, notification.action_url)}
                           className={`p-3 hover:bg-slate-50 cursor-pointer ${!notification.read ? 'bg-blue-50' : ''}`}
                         >
                           <div className="flex justify-between">
                             <p className="font-medium text-slate-800">{notification.title}</p>
                             <span className="text-xs text-slate-500">
-                              {new Date(notification.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                              {new Date(notification.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                             </span>
                           </div>
                           <p className="text-sm text-slate-600 mt-1">{notification.message}</p>

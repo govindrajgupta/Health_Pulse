@@ -13,9 +13,12 @@ const RegisterPage: React.FC = () => {
   const { register } = useAuth();
   const navigate = useNavigate();
 
+  const [confirmMsg, setConfirmMsg] = useState<string | null>(null);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    setConfirmMsg(null);
 
     if (password !== confirmPassword) {
       return setError('Passwords do not match');
@@ -30,9 +33,14 @@ const RegisterPage: React.FC = () => {
     try {
       await register(email, password, displayName);
       navigate('/');
-    } catch (err) {
+    } catch (err: any) {
       console.error('Registration error:', err);
-      setError('Failed to create an account');
+      const msg = err?.message || 'Failed to create an account';
+      if (msg.startsWith('CONFIRM_EMAIL:')) {
+        setConfirmMsg(msg.replace('CONFIRM_EMAIL: ', ''));
+      } else {
+        setError(msg);
+      }
     } finally {
       setLoading(false);
     }
@@ -52,6 +60,14 @@ const RegisterPage: React.FC = () => {
         {error && (
           <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 rounded-lg text-sm">
             {error}
+          </div>
+        )}
+
+        {confirmMsg && (
+          <div className="mb-4 p-4 bg-blue-50 border border-blue-200 text-blue-700 rounded-lg text-sm">
+            <p className="font-bold mb-1">✅ Account Created!</p>
+            <p>{confirmMsg}</p>
+            <Link to="/login" className="mt-2 inline-block text-blue-600 font-medium hover:underline">→ Go to Login</Link>
           </div>
         )}
 

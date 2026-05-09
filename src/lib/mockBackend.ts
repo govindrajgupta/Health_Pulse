@@ -169,6 +169,9 @@ class MockBackend {
 
   // Subscribe to auth changes (simplified version)
   onAuthStateChange(callback: (user: MockUser | null) => void) {
+    // Call immediately so we don't flash login screen
+    callback(this.getCurrentUser());
+    
     // Check for changes periodically
     const interval = setInterval(() => {
       const user = this.getCurrentUser();
